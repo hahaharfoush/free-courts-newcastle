@@ -1,0 +1,52 @@
+name: Refresh availability
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_raw:
+        description: "Also save a raw API sample (data/raw-sample.json)"
+        type: boolean
+        default: false
+  schedule:
+    # Every 10 minutes, 05:00–22:50 UK time-ish (cron is UTC)
+    - cron: "*/10 4-21 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install optional fallback dependency
+        run: pip install --quiet curl_cffi || echo "curl_cffi unavailable — rung 3 disabled"
+
+      - name: Harvest availability
+        env:
+          CLUBSPARK_EMAIL: ${{ secrets.CLUBSPARK_EMAIL }}
+          CLUBSPARK_PASSWORD: ${{ secrets.CLUBSPARK_PASSWORD }}
+          DEBUG_RAW: ${{ inputs.debug_raw && '1' || '0' }}
+        run: python scripts/harvest.py
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: refresh availability"
+            git push
+          fi
