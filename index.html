@@ -1,0 +1,725 @@
+<!doctype html>
+<!--
+  FREE COURTS NEWCASTLE — live availability for Newcastle upon Tyne park tennis courts
+  Data: LTA ClubSpark public availability endpoint
+    https://clubspark.lta.org.uk/v0/VenueBooking/{slug}/GetVenueSessions?resourceID=&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+  Booking still happens on ClubSpark (LTA account needed) — every green/amber slot links out.
+
+  ── CORS ────────────────────────────────────────────────────────────────────
+  If ClubSpark doesn't send Access-Control-Allow-Origin, browser fetches will
+  fail and the app shows an explanation banner. Fix: deploy the free Cloudflare
+  Worker below (workers.cloudflare.com → Create → paste → Deploy), then set
+  PROXY_BASE in the CONFIG block to:  "https://YOUR-WORKER.workers.dev/?url="
+
+  // ---- cloudflare worker (paste as-is) ----
+  export default {
+    async fetch(req) {
+      const raw = new URL(req.url).searchParams.get("url");
+      let target; try { target = new URL(raw); } catch { return new Response("Bad url", { status: 400 }); }
+      if (target.hostname !== "clubspark.lta.org.uk") return new Response("Host not allowed", { status: 403 });
+      const upstream = await fetch(target.toString(), { headers: { accept: "application/json" } });
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          "content-type": upstream.headers.get("content-type") || "application/json",
+          "access-control-allow-origin": "*",
+          "cache-control": "public, max-age=60",
+        },
+      });
+    },
+  };
+  // ---- end worker ----
+-->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1712">
+<title>Free Courts Newcastle — live park tennis availability</title>
+<meta name="description" content="Live availability and prices for every bookable park tennis court in Newcastle upon Tyne. Green = free, amber = paid. Tap a slot to book on ClubSpark.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230e2b1f'/%3E%3Crect x='10' y='14' width='44' height='36' rx='3' fill='none' stroke='%23f2f7f4' stroke-width='3'/%3E%3Cline x1='32' y1='14' x2='32' y2='50' stroke='%23f2f7f4' stroke-width='3'/%3E%3Cline x1='10' y1='25' x2='54' y2='25' stroke='%2331d07c' stroke-width='3'/%3E%3Cline x1='10' y1='39' x2='54' y2='39' stroke='%2331d07c' stroke-width='3'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0a1712; --panel:#0f2119; --panel-2:#132a20; --inset:#0c1c15;
+    --line:rgba(242,247,244,.09); --line-strong:rgba(242,247,244,.18);
+    --chalk:#f2f7f4; --muted:#8ba79a; --faint:#5f7a6e;
+    --free:#31d07c; --free-deep:#0d5c37; --free-ink:#04130b;
+    --paid:#f2b23e; --paid-ink:#211200;
+    --gone:#1b2f26; --gone-ink:#54705f;
+    --danger:#ff7a6b;
+    --r:12px; --r-s:8px;
+    --disp:"Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+    --body:"Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--chalk);
+    font:400 15px/1.45 var(--body);
+    background-image:
+      radial-gradient(1200px 500px at 50% -220px, rgba(49,208,124,.10), transparent 60%),
+      repeating-linear-gradient(0deg, transparent 0 119px, rgba(242,247,244,.025) 119px 120px);
+    min-height:100dvh; padding-bottom:56px;
+  }
+  a{color:inherit}
+  .wrap{max-width:760px; margin:0 auto; padding:0 14px}
+
+  /* ── header ─────────────────────────────────────── */
+  header{padding:18px 0 6px}
+  .brandrow{display:flex; align-items:flex-end; justify-content:space-between; gap:12px}
+  .brand{font-family:var(--disp); font-weight:700; font-size:34px; line-height:.9; letter-spacing:.02em; text-transform:uppercase}
+  .brand em{font-style:normal; color:var(--free)}
+  .brand small{display:block; font-size:13px; font-weight:600; letter-spacing:.32em; color:var(--muted); margin-top:6px}
+  .brand .baseline{display:block; width:118px; height:3px; background:var(--chalk); margin-top:8px; position:relative}
+  .brand .baseline::after{content:""; position:absolute; right:-1px; top:-5px; width:3px; height:13px; background:var(--chalk)}
+  .updated{ text-align:right; color:var(--muted); font-size:12px; white-space:nowrap}
+  .updated b{color:var(--chalk); font-weight:600}
+  .refresh{
+    display:inline-flex; align-items:center; gap:7px; margin-top:6px;
+    background:var(--panel-2); border:1px solid var(--line-strong); color:var(--chalk);
+    font:600 13px var(--body); padding:7px 12px; border-radius:999px; cursor:pointer;
+  }
+  .refresh:hover{border-color:var(--free)}
+  .refresh svg{width:13px; height:13px}
+  .refresh.spinning svg{animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── date rail ───────────────────────────────────── */
+  .dates{display:flex; gap:8px; overflow-x:auto; padding:14px 0 4px; scrollbar-width:none}
+  .dates::-webkit-scrollbar{display:none}
+  .date{
+    flex:0 0 auto; min-width:64px; text-align:center; padding:8px 10px 9px;
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r-s);
+    cursor:pointer; color:var(--muted); font-family:var(--body);
+  }
+  .date .dow{display:block; font:600 11px/1 var(--body); letter-spacing:.14em; text-transform:uppercase}
+  .date .dom{display:block; font:700 22px/1.05 var(--disp); color:var(--chalk); margin-top:3px}
+  .date[aria-pressed="true"]{background:var(--chalk); border-color:var(--chalk)}
+  .date[aria-pressed="true"] .dow{color:#476457}
+  .date[aria-pressed="true"] .dom{color:#0a1712}
+
+  /* ── next free rail (signature) ─────────────────── */
+  .next{margin-top:14px}
+  .next h2{font:700 15px var(--disp); letter-spacing:.22em; text-transform:uppercase; color:var(--muted); margin:0 0 8px}
+  .next h2 b{color:var(--free)}
+  .tickets{display:flex; gap:10px; overflow-x:auto; padding-bottom:6px; scrollbar-width:thin}
+  .ticket{
+    flex:0 0 auto; min-width:128px; text-decoration:none;
+    background:linear-gradient(180deg, var(--panel-2), var(--panel));
+    border:1px solid var(--line-strong); border-radius:var(--r); padding:10px 12px 11px;
+    position:relative; overflow:hidden;
+  }
+  .ticket::before{content:""; position:absolute; inset:0 auto 0 0; width:4px; background:var(--paid)}
+  .ticket.free::before{background:var(--free)}
+  .ticket.free{box-shadow:0 0 0 1px rgba(49,208,124,.25), 0 6px 18px -10px rgba(49,208,124,.5)}
+  .ticket .t{font:700 26px/1 var(--disp); letter-spacing:.02em}
+  .ticket .p{font:600 12px/1.2 var(--body); color:var(--chalk); margin-top:4px}
+  .ticket .c{font:500 11px/1.2 var(--body); color:var(--muted)}
+  .ticket .cost{
+    display:inline-block; margin-top:7px; font:700 11px/1 var(--body); letter-spacing:.06em;
+    padding:4px 7px; border-radius:5px; background:var(--paid); color:var(--paid-ink);
+  }
+  .ticket.free .cost{background:var(--free); color:var(--free-ink)}
+  .next .none{color:var(--faint); font-size:13px; padding:8px 2px}
+
+  /* ── filters ─────────────────────────────────────── */
+  .filters{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:16px 0 4px}
+  .seg{display:inline-flex; background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:3px}
+  .seg button{
+    border:0; background:transparent; color:var(--muted); font:600 12.5px var(--body);
+    padding:6px 12px; border-radius:999px; cursor:pointer;
+  }
+  .seg button[aria-pressed="true"]{background:var(--panel-2); color:var(--chalk); box-shadow:inset 0 0 0 1px var(--line-strong)}
+  .toggle{
+    display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
+    background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:7px 12px;
+    font:600 12.5px var(--body); color:var(--muted);
+  }
+  .toggle .knob{width:30px; height:17px; border-radius:999px; background:var(--gone); position:relative; transition:background .15s}
+  .toggle .knob::after{content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:var(--faint); transition:transform .15s, background .15s}
+  .toggle[aria-pressed="true"]{color:var(--chalk); border-color:rgba(49,208,124,.5)}
+  .toggle[aria-pressed="true"] .knob{background:var(--free-deep)}
+  .toggle[aria-pressed="true"] .knob::after{transform:translateX(13px); background:var(--free)}
+  .parks{display:flex; gap:6px; overflow-x:auto; padding:8px 0 2px; scrollbar-width:none}
+  .parks::-webkit-scrollbar{display:none}
+  .park-chip{
+    flex:0 0 auto; border:1px solid var(--line); background:var(--panel); color:var(--muted);
+    font:600 12px var(--body); padding:6px 11px; border-radius:999px; cursor:pointer;
+  }
+  .park-chip[aria-pressed="true"]{color:var(--chalk); border-color:var(--line-strong); background:var(--panel-2)}
+  .park-chip[aria-pressed="true"]::before{content:"✓ "; color:var(--free)}
+
+  /* ── banners ─────────────────────────────────────── */
+  .banner{
+    margin:14px 0 0; padding:12px 14px; border-radius:var(--r);
+    background:#2a1512; border:1px solid rgba(255,122,107,.4); color:#ffd9d4; font-size:13.5px;
+  }
+  .banner b{color:#fff}
+  .banner code{background:rgba(0,0,0,.35); padding:1px 5px; border-radius:4px; font-size:12px}
+
+  /* ── venue cards ─────────────────────────────────── */
+  .venues{display:flex; flex-direction:column; gap:14px; margin-top:16px}
+  .venue{background:var(--panel); border:1px solid var(--line); border-radius:var(--r); overflow:hidden}
+  .vhead{display:flex; align-items:baseline; justify-content:space-between; gap:10px; padding:12px 14px 8px}
+  .vname{font:700 21px/1 var(--disp); letter-spacing:.03em; text-transform:uppercase}
+  .vname a{text-decoration:none}
+  .vname a:hover{color:var(--free)}
+  .vmeta{font:500 11.5px var(--body); color:var(--muted); white-space:nowrap}
+  .vtag{display:inline-block; font:700 10px/1 var(--body); letter-spacing:.12em; padding:4px 7px; border-radius:4px; vertical-align:2px; margin-left:8px}
+  .vtag.free{background:var(--free); color:var(--free-ink)}
+  .vtag.paid{background:transparent; border:1px solid var(--line-strong); color:var(--muted)}
+  .verr{display:flex; align-items:center; gap:10px; padding:10px 14px 14px; color:#ffc9c2; font-size:13px}
+  .verr .chip{background:rgba(255,122,107,.15); border:1px solid rgba(255,122,107,.45); color:var(--danger); font:700 10.5px/1 var(--body); letter-spacing:.1em; padding:5px 8px; border-radius:5px; text-transform:uppercase}
+  .verr button{margin-left:auto; background:none; border:1px solid var(--line-strong); color:var(--chalk); border-radius:6px; padding:5px 10px; font:600 12px var(--body); cursor:pointer}
+  .vempty{padding:6px 14px 14px; color:var(--faint); font-size:13px}
+
+  .gridwrap{overflow-x:auto; padding:2px 10px 12px; scrollbar-width:thin; -webkit-overflow-scrolling:touch}
+  table.grid{border-collapse:separate; border-spacing:3px; margin:0 auto}
+  .grid th{font:600 10.5px var(--body); color:var(--faint); font-variant-numeric:tabular-nums; padding:0 0 2px; text-align:center; min-width:40px}
+  .grid th.crt, .grid td.crt{
+    position:sticky; left:0; z-index:2; background:var(--panel);
+    font:600 11.5px var(--body); color:var(--muted); text-align:left; padding-right:8px; min-width:56px; white-space:nowrap;
+  }
+  .slot{width:40px; height:44px; padding:0}
+  .slot > *{display:flex; align-items:center; justify-content:center; width:100%; height:100%; border-radius:7px; font:700 11px var(--body); letter-spacing:.02em; text-decoration:none}
+  .slot .gone{background:var(--gone); color:var(--gone-ink)}
+  .slot .past{background:transparent; border:1px dashed var(--gone); color:var(--gone-ink)}
+  .slot a.open{background:var(--paid); color:var(--paid-ink)}
+  .slot a.open:hover{filter:brightness(1.1)}
+  .slot a.open.free{background:var(--free); color:var(--free-ink); box-shadow:0 0 10px -3px rgba(49,208,124,.7)}
+  .slot a.open:focus-visible{outline:2px solid var(--chalk); outline-offset:1px}
+  .slot .dim{background:var(--gone); color:var(--gone-ink); opacity:.55}
+  .vfoot{padding:0 14px 12px}
+  .vfoot a{font:600 12.5px var(--body); color:var(--muted); text-decoration:none}
+  .vfoot a:hover{color:var(--free)}
+
+  /* skeleton */
+  .skel{height:44px; border-radius:7px; background:linear-gradient(90deg, var(--gone) 25%, var(--panel-2) 45%, var(--gone) 65%); background-size:220% 100%; animation:sheen 1.1s linear infinite}
+  @keyframes sheen{to{background-position:-120% 0}}
+
+  /* legend + footer */
+  .legend{display:flex; gap:14px; flex-wrap:wrap; margin:14px 2px 0; color:var(--muted); font-size:12px}
+  .legend i{display:inline-block; width:12px; height:12px; border-radius:4px; margin-right:6px; vertical-align:-1px}
+  .legend .lf{background:var(--free)} .legend .lp{background:var(--paid)} .legend .lg{background:var(--gone)}
+  footer{margin-top:26px; color:var(--faint); font-size:12px; line-height:1.6}
+  footer a{color:var(--muted)}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important; transition:none!important}
+  }
+  @media (min-width:560px){
+    .brand{font-size:40px}
+    .slot{width:44px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brandrow">
+      <h1 class="brand">Free courts <em>Newcastle</em>
+        <small>PARK TENNIS · LIVE</small>
+        <span class="baseline" aria-hidden="true"></span>
+      </h1>
+      <div>
+        <div class="updated" id="updated">Not loaded yet</div>
+        <button class="refresh" id="refreshBtn" type="button" aria-label="Refresh availability">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <nav class="dates" id="dates" aria-label="Choose date"></nav>
+  </header>
+
+  <section class="next" aria-labelledby="nextH">
+    <h2 id="nextH">Next <b>free</b> courts</h2>
+    <div class="tickets" id="tickets"></div>
+  </section>
+
+  <section class="filters" aria-label="Filters">
+    <div class="seg" id="todSeg" role="group" aria-label="Time of day">
+      <button type="button" data-tod="morning" aria-pressed="true">Morning</button>
+      <button type="button" data-tod="afternoon" aria-pressed="true">Afternoon</button>
+      <button type="button" data-tod="evening" aria-pressed="true">Evening</button>
+    </div>
+    <button class="toggle" id="freeOnly" type="button" aria-pressed="false">
+      <span class="knob" aria-hidden="true"></span> Free courts only
+    </button>
+  </section>
+  <div class="parks" id="parkChips" role="group" aria-label="Parks"></div>
+
+  <div id="banner"></div>
+
+  <main class="venues" id="venues"></main>
+
+  <div class="legend" aria-hidden="true">
+    <span><i class="lf"></i>Free to book</span>
+    <span><i class="lp"></i>Paid (price shown)</span>
+    <span><i class="lg"></i>Booked / unavailable / past</span>
+  </div>
+
+  <footer>
+    Unofficial. Live data from the <a href="https://clubspark.lta.org.uk/NewcastleParkTennis" target="_blank" rel="noopener">Newcastle Parks Tennis</a> booking system (Urban Green Newcastle / We Do Tennis on LTA ClubSpark).
+    Booking opens the venue's ClubSpark page — you'll need a free LTA account. Standard courts £4/hr (£2 concession); Elswick and Nuns Moor are free.
+    Annual pass holders book free everywhere. Prices and availability can change on ClubSpark's side.
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ═══════════ CONFIG ═══════════ */
+// If direct browser calls to ClubSpark are blocked by CORS, deploy the
+// Cloudflare Worker from the comment at the top of this file and set:
+//   const PROXY_BASE = "https://YOUR-WORKER.workers.dev/?url=";
+const PROXY_BASE = "";
+const API_BASE   = "https://clubspark.lta.org.uk";
+const CACHE_MS   = 2 * 60 * 1000;   // ~2 minutes
+const FETCH_TIMEOUT_MS = 12000;
+
+const VENUES = [
+  { slug:"ArmstrongPark",       name:"Armstrong Park",        short:"Armstrong",       area:"Heaton · NE6 5HP",      defaultPrice:4, courtsHint:3 },
+  { slug:"elswick-park",        name:"Elswick Park",          short:"Elswick",         area:"Elswick · NE4 6RS",     defaultPrice:0, courtsHint:2 },
+  { slug:"exhibitionpark",      name:"Exhibition Park",       short:"Exhibition",      area:"City Centre · NE2 4PZ", defaultPrice:4, courtsHint:5 },
+  { slug:"GosforthCentralPark", name:"Gosforth Central Park", short:"Gosforth",        area:"Gosforth · NE3 1AD",    defaultPrice:4, courtsHint:2 },
+  { slug:"leazes-park",         name:"Leazes Park",           short:"Leazes",          area:"City Centre · NE2 4BJ", defaultPrice:4, courtsHint:6 },
+  { slug:"NunsMoorPark",        name:"Nuns Moor Park",        short:"Nuns Moor",       area:"Fenham · NE4 5PA",      defaultPrice:0, courtsHint:2 },
+  { slug:"PaddyFreemansPark",   name:"Paddy Freeman's Park",  short:"Paddy Freeman's", area:"High Heaton · NE7 7AH", defaultPrice:4, courtsHint:2 },
+];
+
+/*__CORE__*/
+/* ═══════════ PURE HELPERS (unit-tested) ═══════════ */
+function pad2(n){ return String(n).padStart(2, "0"); }
+function localDateStr(d){ return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
+function hhmm(mins){ return pad2(Math.floor(mins/60)) + ":" + pad2(mins%60); }
+
+function sessionsUrl(slug, dateStr){
+  return API_BASE + "/v0/VenueBooking/" + encodeURIComponent(slug) +
+    "/GetVenueSessions?resourceID=&startDate=" + dateStr + "&endDate=" + dateStr;
+}
+function withProxy(url, proxyBase){
+  var p = (proxyBase === undefined) ? PROXY_BASE : proxyBase;
+  return p ? p + encodeURIComponent(url) : url;
+}
+function bookingUrl(slug, dateStr){
+  return API_BASE + "/" + slug + "/Booking/BookByDate#?date=" + dateStr;
+}
+
+// A session is an open, bookable window when Category and SubCategory are 0
+// ("Default" windows on ClubSpark). Anything else covering an hour makes it
+// unavailable; hours covered by nothing are closed.
+function classifySession(s){
+  if (!s) return { state:"closed" };
+  var cat = Number(s.Category), sub = Number(s.SubCategory);
+  if (cat === 0 && (sub === 0 || Number.isNaN(sub))){
+    var cost = (typeof s.Cost === "number" && s.Cost >= 0 && s.Cost < 100) ? s.Cost : null;
+    return { state:"open", cost:cost };
+  }
+  var n = String(s.Name || "");
+  if (/coach|lesson|camp|school|junior/i.test(n)) return { state:"coaching" };
+  if (/clos|maint|works|event/i.test(n))          return { state:"closed" };
+  return { state:"booked" };
+}
+
+// json → { hours:[6..21], courts:[{name, slots:[{h,state,cost}]}] }
+function parseVenueSessions(json, dateStr, venue){
+  var resources = (json && Array.isArray(json.Resources)) ? json.Resources : [];
+  var minH = 6, maxH = 22;
+  var courts = resources.map(function(r, i){
+    var days = Array.isArray(r && r.Days) ? r.Days : [];
+    var day = days.find(function(d){ return String((d && d.Date) || "").slice(0,10) === dateStr; }) || days[0] || {};
+    var sessions = Array.isArray(day.Sessions) ? day.Sessions : [];
+    sessions.forEach(function(s){
+      if (Number.isFinite(s && s.StartTime)) minH = Math.min(minH, Math.floor(s.StartTime/60));
+      if (Number.isFinite(s && s.EndTime))   maxH = Math.max(maxH, Math.ceil(s.EndTime/60));
+    });
+    return { name:(r && r.Name) || ("Court " + (i+1)), sessions:sessions };
+  });
+  courts.sort(function(a,b){ return a.name.localeCompare(b.name, "en", { numeric:true }); });
+  minH = Math.max(0, minH); maxH = Math.min(24, maxH);
+
+  var hours = [];
+  for (var h = minH; h < maxH; h++) hours.push(h);
+
+  var parsed = courts.map(function(c){
+    var slots = hours.map(function(h){
+      var start = h*60, end = start + 60;
+      var covering = c.sessions.find(function(s){
+        return Number(s.StartTime) <= start && Number(s.EndTime) >= end;
+      });
+      var k = classifySession(covering);
+      if (k.state !== "open") return { h:h, state:k.state, cost:null };
+      var cost = (k.cost !== null) ? k.cost : venue.defaultPrice;
+      return { h:h, state:"open", cost:cost };
+    });
+    return { name:c.name, slots:slots };
+  });
+  return { hours:hours, courts:parsed };
+}
+
+// Time-of-day windows (slot start hour)
+var TOD = { morning:[6,12], afternoon:[12,17], evening:[17,24] };
+function hourInTods(h, tods){
+  if (!tods || !tods.length) return true;
+  return tods.some(function(t){ var w = TOD[t]; return w && h >= w[0] && h < w[1]; });
+}
+
+// Flatten to bookable slots for the "next free" rail + counting.
+// opts: { tods:[], freeOnly:bool, parks:[slug...], nowMins:int|null (null = not today) }
+function collectOpenSlots(results, opts){
+  var out = [];
+  results.forEach(function(res){
+    if (!res || res.status !== "ok") return;
+    if (opts.parks && opts.parks.length && opts.parks.indexOf(res.venue.slug) < 0) return;
+    res.data.courts.forEach(function(c){
+      c.slots.forEach(function(sl){
+        if (sl.state !== "open") return;
+        if (opts.nowMins != null && sl.h*60 <= opts.nowMins) return;      // past / already started
+        if (!hourInTods(sl.h, opts.tods)) return;
+        if (opts.freeOnly && sl.cost > 0) return;
+        out.push({ venue:res.venue, court:c.name, h:sl.h, cost:sl.cost });
+      });
+    });
+  });
+  out.sort(function(a,b){
+    return (a.h - b.h) || (a.cost - b.cost) ||
+      a.venue.short.localeCompare(b.venue.short) ||
+      a.court.localeCompare(b.court, "en", { numeric:true });
+  });
+  return out;
+}
+/*__END_CORE__*/
+
+/* ═══════════ STATE ═══════════ */
+var state = {
+  date: localDateStr(new Date()),
+  tods: ["morning","afternoon","evening"],
+  freeOnly: false,
+  parks: VENUES.map(function(v){ return v.slug; }),
+  results: new Map(),          // slug → {status:'loading'|'ok'|'error', venue, data?, error?}
+  lastUpdated: null,
+};
+var cache = new Map();          // `${slug}|${date}` → {t, json}
+
+function nowMinsIfToday(){
+  var n = new Date();
+  return (state.date === localDateStr(n)) ? (n.getHours()*60 + n.getMinutes()) : null;
+}
+
+/* ═══════════ FETCH ═══════════ */
+function fetchVenue(venue, dateStr, force){
+  var key = venue.slug + "|" + dateStr;
+  var hit = cache.get(key);
+  if (!force && hit && (Date.now() - hit.t) < CACHE_MS){
+    return Promise.resolve(hit.json);
+  }
+  var ctrl = ("AbortController" in window) ? new AbortController() : null;
+  var timer = ctrl && setTimeout(function(){ ctrl.abort(); }, FETCH_TIMEOUT_MS);
+  return fetch(withProxy(sessionsUrl(venue.slug, dateStr)), {
+      signal: ctrl ? ctrl.signal : undefined,
+      headers: { accept: "application/json" },
+    })
+    .then(function(r){
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(json){
+      cache.set(key, { t: Date.now(), json: json });
+      return json;
+    })
+    .finally(function(){ if (timer) clearTimeout(timer); });
+}
+
+function loadAll(force){
+  var dateStr = state.date;
+  VENUES.forEach(function(v){
+    state.results.set(v.slug, { status:"loading", venue:v });
+  });
+  render();
+  setSpinning(true);
+
+  var jobs = VENUES.map(function(v){
+    return fetchVenue(v, dateStr, force).then(
+      function(json){ return { v:v, ok:true, json:json }; },
+      function(err){  return { v:v, ok:false, err:err }; }
+    );
+  });
+
+  return Promise.all(jobs).then(function(settled){
+    if (state.date !== dateStr) return;   // user moved on; drop stale render
+    settled.forEach(function(s){
+      if (s.ok){
+        try{
+          var data = parseVenueSessions(s.json, dateStr, s.v);
+          state.results.set(s.v.slug, { status:"ok", venue:s.v, data:data });
+        }catch(e){
+          state.results.set(s.v.slug, { status:"error", venue:s.v, error:e });
+        }
+      }else{
+        state.results.set(s.v.slug, { status:"error", venue:s.v, error:s.err });
+      }
+    });
+    state.lastUpdated = new Date();
+    render();
+    setSpinning(false);
+  });
+}
+
+function retryVenue(slug){
+  var v = VENUES.find(function(x){ return x.slug === slug; });
+  if (!v) return;
+  state.results.set(slug, { status:"loading", venue:v });
+  render();
+  fetchVenue(v, state.date, true).then(
+    function(json){
+      state.results.set(slug, { status:"ok", venue:v, data:parseVenueSessions(json, state.date, v) });
+      state.lastUpdated = new Date(); render();
+    },
+    function(err){
+      state.results.set(slug, { status:"error", venue:v, error:err });
+      render();
+    }
+  );
+}
+
+/* ═══════════ RENDER ═══════════ */
+var $ = function(id){ return document.getElementById(id); };
+
+function setSpinning(on){
+  var b = $("refreshBtn");
+  if (b) b.classList.toggle("spinning", !!on);
+}
+
+function esc(s){
+  return String(s).replace(/[&<>"']/g, function(c){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
+
+function renderDates(){
+  var el = $("dates"); el.innerHTML = "";
+  var today = new Date();
+  var fmtDow = new Intl.DateTimeFormat("en-GB", { weekday:"short" });
+  for (var i = 0; i < 7; i++){
+    var d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    var ds = localDateStr(d);
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "date";
+    b.setAttribute("aria-pressed", ds === state.date ? "true" : "false");
+    b.dataset.date = ds;
+    b.innerHTML = '<span class="dow">' + (i === 0 ? "Today" : fmtDow.format(d)) + '</span>' +
+                  '<span class="dom">' + d.getDate() + '</span>';
+    b.addEventListener("click", function(){
+      state.date = this.dataset.date;
+      renderDates();
+      loadAll(false);
+    });
+    el.appendChild(b);
+  }
+}
+
+function renderParkChips(){
+  var el = $("parkChips"); el.innerHTML = "";
+  VENUES.forEach(function(v){
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "park-chip";
+    b.textContent = v.short;
+    b.setAttribute("aria-pressed", state.parks.indexOf(v.slug) >= 0 ? "true" : "false");
+    b.addEventListener("click", function(){
+      var i = state.parks.indexOf(v.slug);
+      if (i >= 0){
+        if (state.parks.length > 1) state.parks.splice(i, 1);   // keep at least one
+      } else {
+        state.parks.push(v.slug);
+      }
+      renderParkChips(); render();
+    });
+    el.appendChild(b);
+  });
+}
+
+function renderBanner(){
+  var el = $("banner");
+  var rs = Array.from(state.results.values());
+  var errors = rs.filter(function(r){ return r.status === "error"; }).length;
+  var loading = rs.some(function(r){ return r.status === "loading"; });
+  if (!loading && rs.length && errors >= VENUES.length){
+    var viaProxy = !!PROXY_BASE;
+    el.innerHTML =
+      '<div class="banner"><b>Couldn\u2019t reach the booking system from your browser.</b> ' +
+      (viaProxy
+        ? 'Your proxy (<code>PROXY_BASE</code>) didn\u2019t respond \u2014 check the Worker is deployed and the URL ends with <code>?url=</code>.'
+        : 'This is usually the browser blocking cross-site requests (CORS) rather than ClubSpark being down \u2014 the same data loads fine on clubspark.lta.org.uk. Fix: deploy the tiny Cloudflare Worker in the comment at the top of this file, then set <code>PROXY_BASE</code> to your worker URL.') +
+      ' It can also just be your connection \u2014 try Refresh.</div>';
+  } else {
+    el.innerHTML = "";
+  }
+}
+
+function renderTickets(){
+  var el = $("tickets");
+  var slots = collectOpenSlots(Array.from(state.results.values()), {
+    tods: state.tods, freeOnly: state.freeOnly, parks: state.parks, nowMins: nowMinsIfToday(),
+  });
+  if (!slots.length){
+    var anyLoading = Array.from(state.results.values()).some(function(r){ return r.status === "loading"; });
+    el.innerHTML = '<div class="none">' + (anyLoading ? "Checking all 7 parks\u2026" : "Nothing bookable matches \u2014 try another day or clear filters.") + '</div>';
+    return;
+  }
+  el.innerHTML = slots.slice(0, 12).map(function(s){
+    var free = s.cost === 0;
+    return '<a class="ticket' + (free ? " free" : "") + '" target="_blank" rel="noopener" ' +
+      'href="' + bookingUrl(s.venue.slug, state.date) + '" ' +
+      'aria-label="Book ' + esc(s.court) + ' at ' + esc(s.venue.name) + ', ' + hhmm(s.h*60) + (free ? ", free" : ", \u00a3" + s.cost) + '">' +
+      '<span class="t">' + hhmm(s.h*60) + '</span>' +
+      '<span class="p">' + esc(s.venue.short) + '</span>' +
+      '<span class="c">' + esc(s.court) + '</span><br>' +
+      '<span class="cost">' + (free ? "FREE" : "\u00a3" + s.cost) + '</span></a>';
+  }).join("");
+}
+
+function renderVenues(){
+  var el = $("venues"); el.innerHTML = "";
+  var nowMins = nowMinsIfToday();
+
+  VENUES.forEach(function(v){
+    if (state.parks.indexOf(v.slug) < 0) return;
+    var res = state.results.get(v.slug) || { status:"loading", venue:v };
+    var card = document.createElement("section");
+    card.className = "venue";
+    var isFreeVenue = v.defaultPrice === 0;
+
+    var head =
+      '<div class="vhead"><h3 class="vname"><a target="_blank" rel="noopener" href="' + API_BASE + '/' + v.slug + '">' +
+      esc(v.name) + '</a><span class="vtag ' + (isFreeVenue ? 'free">FREE' : 'paid">\u00a34/HR') + '</span></h3>' +
+      '<span class="vmeta">' + esc(v.area) + '</span></div>';
+
+    if (res.status === "loading"){
+      var rows = "";
+      for (var i = 0; i < v.courtsHint; i++){
+        rows += '<tr><td class="crt">Court ' + (i+1) + '</td>' +
+          Array.from({length:8}).map(function(){ return '<td class="slot"><div class="skel"></div></td>'; }).join("") + '</tr>';
+      }
+      card.innerHTML = head + '<div class="gridwrap"><table class="grid"><tbody>' + rows + '</tbody></table></div>';
+      el.appendChild(card); return;
+    }
+
+    if (res.status === "error"){
+      card.innerHTML = head +
+        '<div class="verr"><span class="chip">No data</span>' +
+        '<span>Couldn\u2019t load this park \u2014 the others are unaffected.</span>' +
+        '<button type="button" data-retry="' + esc(v.slug) + '">Retry</button></div>';
+      el.appendChild(card); return;
+    }
+
+    var data = res.data;
+    if (!data.courts.length){
+      card.innerHTML = head + '<div class="vempty">No courts returned for this date \u2014 check the venue page on ClubSpark.</div>' +
+        '<div class="vfoot"><a target="_blank" rel="noopener" href="' + bookingUrl(v.slug, state.date) + '">Open ' + esc(v.short) + ' booking page \u2197</a></div>';
+      el.appendChild(card); return;
+    }
+
+    var visHours = data.hours.filter(function(h){ return hourInTods(h, state.tods); });
+    var thead = '<tr><th class="crt" scope="col"></th>' +
+      visHours.map(function(h){ return '<th scope="col">' + pad2(h) + '</th>'; }).join("") + '</tr>';
+
+    var openCount = 0;
+    var rows = data.courts.map(function(c){
+      var cells = visHours.map(function(h){
+        var sl = c.slots[data.hours.indexOf(h)];
+        var label = esc(c.name) + " at " + esc(v.name) + ", " + hhmm(h*60);
+        if (nowMins != null && h*60 <= nowMins){
+          return '<td class="slot"><div class="past" title="' + label + ' \u2014 past">\u2013</div></td>';
+        }
+        if (sl.state !== "open"){
+          var word = sl.state === "coaching" ? "Coaching" : (sl.state === "closed" ? "Closed" : "Booked");
+          return '<td class="slot"><div class="gone" title="' + label + ' \u2014 ' + word + '">\u00d7</div></td>';
+        }
+        if (state.freeOnly && sl.cost > 0){
+          return '<td class="slot"><div class="dim" title="' + label + ' \u2014 \u00a3' + sl.cost + ' (hidden by free-only filter)">\u00a3</div></td>';
+        }
+        openCount++;
+        var free = sl.cost === 0;
+        return '<td class="slot"><a class="open' + (free ? " free" : "") + '" target="_blank" rel="noopener" ' +
+          'href="' + bookingUrl(v.slug, state.date) + '" ' +
+          'aria-label="Book ' + label + ', ' + (free ? "free" : "\u00a3" + sl.cost) + '">' +
+          (free ? "\u25cf" : "\u00a3" + sl.cost) + '</a></td>';
+      }).join("");
+      return '<tr><td class="crt">' + esc(c.name) + '</td>' + cells + '</tr>';
+    }).join("");
+
+    var body = visHours.length
+      ? '<div class="gridwrap"><table class="grid"><thead>' + thead + '</thead><tbody>' + rows + '</tbody></table></div>'
+      : '<div class="vempty">No hours match the time-of-day filter.</div>';
+    var note = (visHours.length && !openCount)
+      ? '<div class="vempty">Fully booked for the visible hours.</div>' : "";
+
+    card.innerHTML = head + body + note +
+      '<div class="vfoot"><a target="_blank" rel="noopener" href="' + bookingUrl(v.slug, state.date) + '">Book at ' + esc(v.short) + ' on ClubSpark \u2197</a></div>';
+    el.appendChild(card);
+  });
+
+  el.querySelectorAll("[data-retry]").forEach(function(b){
+    b.addEventListener("click", function(){ retryVenue(this.dataset.retry); });
+  });
+}
+
+function renderUpdated(){
+  var el = $("updated");
+  el.innerHTML = state.lastUpdated
+    ? 'Updated <b>' + state.lastUpdated.toLocaleTimeString("en-GB") + '</b>'
+    : "Loading\u2026";
+}
+
+function render(){
+  renderUpdated();
+  renderBanner();
+  renderTickets();
+  renderVenues();
+}
+
+/* ═══════════ WIRING ═══════════ */
+function init(){
+  renderDates();
+  renderParkChips();
+
+  $("refreshBtn").addEventListener("click", function(){ loadAll(true); });
+
+  $("todSeg").querySelectorAll("button").forEach(function(b){
+    b.addEventListener("click", function(){
+      var t = this.dataset.tod;
+      var i = state.tods.indexOf(t);
+      if (i >= 0){ if (state.tods.length > 1) state.tods.splice(i, 1); }
+      else state.tods.push(t);
+      this.setAttribute("aria-pressed", state.tods.indexOf(t) >= 0 ? "true" : "false");
+      render();
+    });
+  });
+
+  $("freeOnly").addEventListener("click", function(){
+    state.freeOnly = !state.freeOnly;
+    this.setAttribute("aria-pressed", String(state.freeOnly));
+    render();
+  });
+
+  loadAll(false);
+}
+
+// Test hooks (harmless in production)
+window.__FCN = {
+  init: init, loadAll: loadAll, state: state, VENUES: VENUES,
+  parseVenueSessions: parseVenueSessions, collectOpenSlots: collectOpenSlots,
+  classifySession: classifySession, sessionsUrl: sessionsUrl, withProxy: withProxy,
+  hourInTods: hourInTods, bookingUrl: bookingUrl,
+};
+if (!window.__FCN_NO_AUTO){
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+}
+</script>
+</body>
+</html>
