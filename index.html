@@ -1,42 +1,30 @@
 <!doctype html>
 <!--
-  FREE COURTS NEWCASTLE — live availability for Newcastle upon Tyne park tennis courts
-  Data: LTA ClubSpark public availability endpoint
-    https://clubspark.lta.org.uk/v0/VenueBooking/{slug}/GetVenueSessions?resourceID=&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
-  Booking still happens on ClubSpark (LTA account needed) — every green/amber slot links out.
+  FREE COURTS NEWCASTLE — availability for Newcastle upon Tyne park tennis courts
 
-  ── CORS ────────────────────────────────────────────────────────────────────
-  If ClubSpark doesn't send Access-Control-Allow-Origin, browser fetches will
-  fail and the app shows an explanation banner. Fix: deploy the free Cloudflare
-  Worker below (workers.cloudflare.com → Create → paste → Deploy), then set
-  PROXY_BASE in the CONFIG block to:  "https://YOUR-WORKER.workers.dev/?url="
+  HOW DATA FLOWS (v2, static-first)
+  A GitHub Action (.github/workflows/refresh.yml) runs scripts/harvest.py every
+  ~10 minutes. It fetches ClubSpark availability server-side (via the ClubSpark
+  Booker mobile API on api.clubspark.uk, which is not behind the browser
+  challenge that blocks clubspark.lta.org.uk) and commits a pre-parsed snapshot
+  to data/availability.json. This page just reads that file from its own origin
+  — no CORS, no proxy, works for everyone who has the link.
 
-  // ---- cloudflare worker (paste as-is) ----
-  export default {
-    async fetch(req) {
-      const raw = new URL(req.url).searchParams.get("url");
-      let target; try { target = new URL(raw); } catch { return new Response("Bad url", { status: 400 }); }
-      if (target.hostname !== "clubspark.lta.org.uk") return new Response("Host not allowed", { status: 403 });
-      const upstream = await fetch(target.toString(), { headers: { accept: "application/json" } });
-      return new Response(upstream.body, {
-        status: upstream.status,
-        headers: {
-          "content-type": upstream.headers.get("content-type") || "application/json",
-          "access-control-allow-origin": "*",
-          "cache-control": "public, max-age=60",
-        },
-      });
-    },
-  };
-  // ---- end worker ----
+  LIVE MODE (optional override)
+  If data/availability.json can't be loaded AND PROXY_BASE is set below, the
+  page falls back to fetching ClubSpark live through your proxy, exactly like
+  v1. Leave PROXY_BASE = "" for the normal pipeline setup.
+
+  NOTE: opening this file by double-clicking it locally (file://) can't load
+  the data file — use the GitHub Pages link.
 -->
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a1712">
-<title>Free Courts Newcastle — live park tennis availability</title>
-<meta name="description" content="Live availability and prices for every bookable park tennis court in Newcastle upon Tyne. Green = free, amber = paid. Tap a slot to book on ClubSpark.">
+<title>Free Courts Newcastle — park tennis availability</title>
+<meta name="description" content="Availability and prices for every bookable park tennis court in Newcastle upon Tyne, refreshed every few minutes. Green = free, amber = paid. Tap a slot to book on ClubSpark.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -75,8 +63,9 @@
   .brand small{display:block; font-size:13px; font-weight:600; letter-spacing:.32em; color:var(--muted); margin-top:6px}
   .brand .baseline{display:block; width:118px; height:3px; background:var(--chalk); margin-top:8px; position:relative}
   .brand .baseline::after{content:""; position:absolute; right:-1px; top:-5px; width:3px; height:13px; background:var(--chalk)}
-  .updated{ text-align:right; color:var(--muted); font-size:12px; white-space:nowrap}
+  .updated{text-align:right; color:var(--muted); font-size:12px; white-space:nowrap}
   .updated b{color:var(--chalk); font-weight:600}
+  .stale{display:inline-block; margin-left:6px; padding:2px 6px; border-radius:4px; background:rgba(242,178,62,.15); border:1px solid rgba(242,178,62,.5); color:var(--paid); font:700 10px/1.3 var(--body); letter-spacing:.06em; vertical-align:1px}
   .refresh{
     display:inline-flex; align-items:center; gap:7px; margin-top:6px;
     background:var(--panel-2); border:1px solid var(--line-strong); color:var(--chalk);
@@ -222,11 +211,11 @@
   <header>
     <div class="brandrow">
       <h1 class="brand">Free courts <em>Newcastle</em>
-        <small>PARK TENNIS · LIVE</small>
+        <small>PARK TENNIS</small>
         <span class="baseline" aria-hidden="true"></span>
       </h1>
       <div>
-        <div class="updated" id="updated">Not loaded yet</div>
+        <div class="updated" id="updated">Loading…</div>
         <button class="refresh" id="refreshBtn" type="button" aria-label="Refresh availability">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
           Refresh
@@ -264,7 +253,7 @@
   </div>
 
   <footer>
-    Unofficial. Live data from the <a href="https://clubspark.lta.org.uk/NewcastleParkTennis" target="_blank" rel="noopener">Newcastle Parks Tennis</a> booking system (Urban Green Newcastle / We Do Tennis on LTA ClubSpark).
+    Unofficial. Availability from the <a href="https://clubspark.lta.org.uk/NewcastleParkTennis" target="_blank" rel="noopener">Newcastle Parks Tennis</a> booking system (Urban Green Newcastle / We Do Tennis on LTA ClubSpark), refreshed automatically every ~10 minutes.
     Booking opens the venue's ClubSpark page — you'll need a free LTA account. Standard courts £4/hr (£2 concession); Elswick and Nuns Moor are free.
     Annual pass holders book free everywhere. Prices and availability can change on ClubSpark's side.
   </footer>
@@ -273,13 +262,15 @@
 <script>
 "use strict";
 /* ═══════════ CONFIG ═══════════ */
-// If direct browser calls to ClubSpark are blocked by CORS, deploy the
-// Cloudflare Worker from the comment at the top of this file and set:
-//   const PROXY_BASE = "https://YOUR-WORKER.workers.dev/?url=";
-const PROXY_BASE = "https://free-courts.hahaharfoush.workers.dev/?url=";
+// Pre-parsed snapshot committed by the GitHub Action (see file header).
+const DATA_URL = "data/availability.json";
+// Optional live-mode override: if the snapshot can't load AND this is set,
+// the page fetches ClubSpark directly through your proxy (v1 behaviour).
+const PROXY_BASE = "";
 const API_BASE   = "https://clubspark.lta.org.uk";
-const CACHE_MS   = 2 * 60 * 1000;   // ~2 minutes
+const CACHE_MS   = 2 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 12000;
+const STALE_AFTER_MIN = 25;   // snapshot older than this gets a "stale" badge
 
 const VENUES = [
   { slug:"ArmstrongPark",       name:"Armstrong Park",        short:"Armstrong",       area:"Heaton · NE6 5HP",      defaultPrice:4, courtsHint:3 },
@@ -325,7 +316,7 @@ function classifySession(s){
   return { state:"booked" };
 }
 
-// json → { hours:[6..21], courts:[{name, slots:[{h,state,cost}]}] }
+// json → { hours:[6..21], courts:[{name, slots:[{h,state,cost}]}] }  (live mode)
 function parseVenueSessions(json, dateStr, venue){
   var resources = (json && Array.isArray(json.Resources)) ? json.Resources : [];
   var minH = 6, maxH = 22;
@@ -369,7 +360,6 @@ function hourInTods(h, tods){
 }
 
 // Flatten to bookable slots for the "next free" rail + counting.
-// opts: { tods:[], freeOnly:bool, parks:[slug...], nowMins:int|null (null = not today) }
 function collectOpenSlots(results, opts){
   var out = [];
   results.forEach(function(res){
@@ -378,7 +368,7 @@ function collectOpenSlots(results, opts){
     res.data.courts.forEach(function(c){
       c.slots.forEach(function(sl){
         if (sl.state !== "open") return;
-        if (opts.nowMins != null && sl.h*60 <= opts.nowMins) return;      // past / already started
+        if (opts.nowMins != null && sl.h*60 <= opts.nowMins) return;
         if (!hourInTods(sl.h, opts.tods)) return;
         if (opts.freeOnly && sl.cost > 0) return;
         out.push({ venue:res.venue, court:c.name, h:sl.h, cost:sl.cost });
@@ -396,22 +386,71 @@ function collectOpenSlots(results, opts){
 
 /* ═══════════ STATE ═══════════ */
 var state = {
+  mode: null,               // 'static' | 'live'
   date: localDateStr(new Date()),
+  days: null,               // array of 7 date strings (from snapshot in static mode)
   tods: ["morning","afternoon","evening"],
   freeOnly: false,
   parks: VENUES.map(function(v){ return v.slug; }),
-  results: new Map(),          // slug → {status:'loading'|'ok'|'error', venue, data?, error?}
-  lastUpdated: null,
+  results: new Map(),       // slug → {status, venue, data?, error?}
+  staticData: null,         // parsed availability.json
+  generatedAt: null,        // Date, snapshot generation time
+  lastChecked: null,        // Date, when this page last (re)loaded data
 };
-var cache = new Map();          // `${slug}|${date}` → {t, json}
+var cache = new Map();       // live mode only
 
+function clientDays(){
+  var t = new Date(), out = [];
+  for (var i = 0; i < 7; i++){
+    out.push(localDateStr(new Date(t.getFullYear(), t.getMonth(), t.getDate() + i)));
+  }
+  return out;
+}
 function nowMinsIfToday(){
   var n = new Date();
   return (state.date === localDateStr(n)) ? (n.getHours()*60 + n.getMinutes()) : null;
 }
 
-/* ═══════════ FETCH ═══════════ */
-function fetchVenue(venue, dateStr, force){
+/* ═══════════ DATA LOADING ═══════════ */
+function loadStatic(){
+  var url = DATA_URL + (DATA_URL.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now();
+  return fetch(url, { headers:{ accept:"application/json" }, cache:"no-store" })
+    .then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function(json){
+      if (!json || !json.venues || !Array.isArray(json.days) || !json.days.length){
+        throw new Error("Bad snapshot shape");
+      }
+      state.staticData = json;
+      state.mode = "static";
+      state.days = json.days.slice(0, 7);
+      if (state.days.indexOf(state.date) < 0) state.date = state.days[0];
+      state.generatedAt = json.generatedAt ? new Date(json.generatedAt) : null;
+      state.lastChecked = new Date();
+      applyStaticDate();
+      return true;
+    });
+}
+
+function applyStaticDate(){
+  var d = state.date;
+  VENUES.forEach(function(v){
+    var entry = state.staticData.venues[v.slug];
+    if (!entry){
+      state.results.set(v.slug, { status:"error", venue:v, error:new Error("Not in snapshot") });
+    } else if (!entry.ok){
+      state.results.set(v.slug, { status:"error", venue:v, error:new Error(entry.error || "No data") });
+    } else {
+      var day = (entry.dates || {})[d];
+      if (day && Array.isArray(day.hours) && Array.isArray(day.courts)){
+        state.results.set(v.slug, { status:"ok", venue:v, data:day });
+      } else {
+        state.results.set(v.slug, { status:"error", venue:v, error:new Error("Date missing from snapshot") });
+      }
+    }
+  });
+}
+
+function fetchVenueLive(venue, dateStr, force){
   var key = venue.slug + "|" + dateStr;
   var hit = cache.get(key);
   if (!force && hit && (Date.now() - hit.t) < CACHE_MS){
@@ -434,28 +473,24 @@ function fetchVenue(venue, dateStr, force){
     .finally(function(){ if (timer) clearTimeout(timer); });
 }
 
-function loadAll(force){
+function loadLive(force){
   var dateStr = state.date;
-  VENUES.forEach(function(v){
-    state.results.set(v.slug, { status:"loading", venue:v });
-  });
+  state.mode = "live";
+  state.days = state.days || clientDays();
+  VENUES.forEach(function(v){ state.results.set(v.slug, { status:"loading", venue:v }); });
   render();
-  setSpinning(true);
-
   var jobs = VENUES.map(function(v){
-    return fetchVenue(v, dateStr, force).then(
+    return fetchVenueLive(v, dateStr, force).then(
       function(json){ return { v:v, ok:true, json:json }; },
       function(err){  return { v:v, ok:false, err:err }; }
     );
   });
-
   return Promise.all(jobs).then(function(settled){
-    if (state.date !== dateStr) return;   // user moved on; drop stale render
+    if (state.date !== dateStr) return;
     settled.forEach(function(s){
       if (s.ok){
         try{
-          var data = parseVenueSessions(s.json, dateStr, s.v);
-          state.results.set(s.v.slug, { status:"ok", venue:s.v, data:data });
+          state.results.set(s.v.slug, { status:"ok", venue:s.v, data:parseVenueSessions(s.json, dateStr, s.v) });
         }catch(e){
           state.results.set(s.v.slug, { status:"error", venue:s.v, error:e });
         }
@@ -463,21 +498,39 @@ function loadAll(force){
         state.results.set(s.v.slug, { status:"error", venue:s.v, error:s.err });
       }
     });
-    state.lastUpdated = new Date();
-    render();
-    setSpinning(false);
+    state.generatedAt = new Date();
+    state.lastChecked = new Date();
   });
 }
 
+function loadAll(force){
+  setSpinning(true);
+  VENUES.forEach(function(v){ state.results.set(v.slug, { status:"loading", venue:v }); });
+  state.days = state.days || clientDays();
+  render();
+  return loadStatic()
+    .catch(function(staticErr){
+      if (PROXY_BASE) return loadLive(force);
+      state.mode = "static-missing";
+      state.staticError = staticErr;
+      VENUES.forEach(function(v){
+        state.results.set(v.slug, { status:"error", venue:v, error:staticErr });
+      });
+    })
+    .then(function(){ render(); setSpinning(false); })
+    .catch(function(){ render(); setSpinning(false); });
+}
+
 function retryVenue(slug){
+  if (state.mode !== "live") return;
   var v = VENUES.find(function(x){ return x.slug === slug; });
   if (!v) return;
   state.results.set(slug, { status:"loading", venue:v });
   render();
-  fetchVenue(v, state.date, true).then(
+  fetchVenueLive(v, state.date, true).then(
     function(json){
       state.results.set(slug, { status:"ok", venue:v, data:parseVenueSessions(json, state.date, v) });
-      state.lastUpdated = new Date(); render();
+      render();
     },
     function(err){
       state.results.set(slug, { status:"error", venue:v, error:err });
@@ -502,24 +555,26 @@ function esc(s){
 
 function renderDates(){
   var el = $("dates"); el.innerHTML = "";
-  var today = new Date();
+  var days = state.days || clientDays();
+  var today = localDateStr(new Date());
   var fmtDow = new Intl.DateTimeFormat("en-GB", { weekday:"short" });
-  for (var i = 0; i < 7; i++){
-    var d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
-    var ds = localDateStr(d);
+  days.forEach(function(ds){
+    var d = new Date(ds + "T12:00:00");
     var b = document.createElement("button");
     b.type = "button"; b.className = "date";
     b.setAttribute("aria-pressed", ds === state.date ? "true" : "false");
     b.dataset.date = ds;
-    b.innerHTML = '<span class="dow">' + (i === 0 ? "Today" : fmtDow.format(d)) + '</span>' +
+    b.innerHTML = '<span class="dow">' + (ds === today ? "Today" : fmtDow.format(d)) + '</span>' +
                   '<span class="dom">' + d.getDate() + '</span>';
     b.addEventListener("click", function(){
       state.date = this.dataset.date;
       renderDates();
-      loadAll(false);
+      if (state.mode === "static"){ applyStaticDate(); render(); }
+      else if (state.mode === "live"){ loadLive(false).then(render); }
+      else { loadAll(false); }
     });
     el.appendChild(b);
-  }
+  });
 }
 
 function renderParkChips(){
@@ -531,11 +586,8 @@ function renderParkChips(){
     b.setAttribute("aria-pressed", state.parks.indexOf(v.slug) >= 0 ? "true" : "false");
     b.addEventListener("click", function(){
       var i = state.parks.indexOf(v.slug);
-      if (i >= 0){
-        if (state.parks.length > 1) state.parks.splice(i, 1);   // keep at least one
-      } else {
-        state.parks.push(v.slug);
-      }
+      if (i >= 0){ if (state.parks.length > 1) state.parks.splice(i, 1); }
+      else { state.parks.push(v.slug); }
       renderParkChips(); render();
     });
     el.appendChild(b);
@@ -544,20 +596,29 @@ function renderParkChips(){
 
 function renderBanner(){
   var el = $("banner");
-  var rs = Array.from(state.results.values());
-  var errors = rs.filter(function(r){ return r.status === "error"; }).length;
-  var loading = rs.some(function(r){ return r.status === "loading"; });
-  if (!loading && rs.length && errors >= VENUES.length){
-    var viaProxy = !!PROXY_BASE;
+  if (state.mode === "static-missing"){
     el.innerHTML =
-      '<div class="banner"><b>Couldn\u2019t reach the booking system from your browser.</b> ' +
-      (viaProxy
-        ? 'Your proxy (<code>PROXY_BASE</code>) didn\u2019t respond \u2014 check the Worker is deployed and the URL ends with <code>?url=</code>.'
-        : 'This is usually the browser blocking cross-site requests (CORS) rather than ClubSpark being down \u2014 the same data loads fine on clubspark.lta.org.uk. Fix: deploy the tiny Cloudflare Worker in the comment at the top of this file, then set <code>PROXY_BASE</code> to your worker URL.') +
-      ' It can also just be your connection \u2014 try Refresh.</div>';
-  } else {
-    el.innerHTML = "";
+      '<div class="banner"><b>No availability data yet.</b> ' +
+      'This page reads <code>data/availability.json</code>, which is created by the ' +
+      '<b>Refresh availability</b> GitHub Action. If you\u2019ve just set up: check ' +
+      'Settings \u2192 Actions \u2192 General \u2192 Workflow permissions is <b>Read and write</b>, then run the ' +
+      'workflow once from the Actions tab and reload. ' +
+      '(Also note: opening this file directly from your computer can\u2019t load data \u2014 use the GitHub Pages link.)</div>';
+    return;
   }
+  if (state.mode === "live"){
+    var rs = Array.from(state.results.values());
+    var errors = rs.filter(function(r){ return r.status === "error"; }).length;
+    var loading = rs.some(function(r){ return r.status === "loading"; });
+    if (!loading && rs.length && errors >= VENUES.length){
+      el.innerHTML =
+        '<div class="banner"><b>Couldn\u2019t reach the booking system from your browser.</b> ' +
+        'Your proxy (<code>PROXY_BASE</code>) didn\u2019t respond \u2014 check it\u2019s deployed and the URL ends with <code>?url=</code>. ' +
+        'It can also just be your connection \u2014 try Refresh.</div>';
+      return;
+    }
+  }
+  el.innerHTML = "";
 }
 
 function renderTickets(){
@@ -609,10 +670,15 @@ function renderVenues(){
     }
 
     if (res.status === "error"){
+      var retry = state.mode === "live"
+        ? '<button type="button" data-retry="' + esc(v.slug) + '">Retry</button>'
+        : '';
+      var msg = state.mode === "static"
+        ? 'This park failed in the last refresh \u2014 it retries automatically every ~10 minutes.'
+        : 'Couldn\u2019t load this park \u2014 the others are unaffected.';
       card.innerHTML = head +
-        '<div class="verr"><span class="chip">No data</span>' +
-        '<span>Couldn\u2019t load this park \u2014 the others are unaffected.</span>' +
-        '<button type="button" data-retry="' + esc(v.slug) + '">Retry</button></div>';
+        '<div class="verr"><span class="chip">No data</span><span>' + msg + '</span>' + retry + '</div>' +
+        '<div class="vfoot"><a target="_blank" rel="noopener" href="' + bookingUrl(v.slug, state.date) + '">Check ' + esc(v.short) + ' on ClubSpark \u2197</a></div>';
       el.appendChild(card); return;
     }
 
@@ -635,8 +701,9 @@ function renderVenues(){
         if (nowMins != null && h*60 <= nowMins){
           return '<td class="slot"><div class="past" title="' + label + ' \u2014 past">\u2013</div></td>';
         }
-        if (sl.state !== "open"){
-          var word = sl.state === "coaching" ? "Coaching" : (sl.state === "closed" ? "Closed" : "Booked");
+        if (!sl || sl.state !== "open"){
+          var st = sl ? sl.state : "closed";
+          var word = st === "coaching" ? "Coaching" : (st === "closed" ? "Closed" : "Booked");
           return '<td class="slot"><div class="gone" title="' + label + ' \u2014 ' + word + '">\u00d7</div></td>';
         }
         if (state.freeOnly && sl.cost > 0){
@@ -670,9 +737,14 @@ function renderVenues(){
 
 function renderUpdated(){
   var el = $("updated");
-  el.innerHTML = state.lastUpdated
-    ? 'Updated <b>' + state.lastUpdated.toLocaleTimeString("en-GB") + '</b>'
-    : "Loading\u2026";
+  if (!state.generatedAt){ el.textContent = "Loading\u2026"; return; }
+  var ageMin = Math.max(0, Math.round((Date.now() - state.generatedAt.getTime()) / 60000));
+  var when = state.generatedAt.toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" });
+  var html = 'Data <b>' + when + '</b> (' + (ageMin < 1 ? "just now" : ageMin + "m ago") + ')';
+  if (state.mode === "static" && ageMin > STALE_AFTER_MIN){
+    html += '<span class="stale" title="The refresh workflow normally runs every 10 minutes \u2014 check the Actions tab if this persists.">STALE</span>';
+  }
+  el.innerHTML = html;
 }
 
 function render(){
@@ -687,7 +759,10 @@ function init(){
   renderDates();
   renderParkChips();
 
-  $("refreshBtn").addEventListener("click", function(){ loadAll(true); });
+  $("refreshBtn").addEventListener("click", function(){
+    if (state.mode === "live"){ setSpinning(true); loadLive(true).then(function(){ render(); setSpinning(false); }); }
+    else loadAll(true);
+  });
 
   $("todSeg").querySelectorAll("button").forEach(function(b){
     b.addEventListener("click", function(){
@@ -706,7 +781,7 @@ function init(){
     render();
   });
 
-  loadAll(false);
+  loadAll(false).then(function(){ renderDates(); });
 }
 
 // Test hooks (harmless in production)
@@ -714,7 +789,7 @@ window.__FCN = {
   init: init, loadAll: loadAll, state: state, VENUES: VENUES,
   parseVenueSessions: parseVenueSessions, collectOpenSlots: collectOpenSlots,
   classifySession: classifySession, sessionsUrl: sessionsUrl, withProxy: withProxy,
-  hourInTods: hourInTods, bookingUrl: bookingUrl,
+  hourInTods: hourInTods, bookingUrl: bookingUrl, applyStaticDate: applyStaticDate,
 };
 if (!window.__FCN_NO_AUTO){
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
