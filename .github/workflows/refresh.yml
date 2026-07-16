@@ -9,7 +9,7 @@ on:
         default: false
   schedule:
     # Every 10 minutes, 05:00–22:50 UK time-ish (cron is UTC)
-    - cron: "*/10 4-21 * * *"
+    - cron: "*/5 4-21 * * *"
 
 permissions:
   contents: write
